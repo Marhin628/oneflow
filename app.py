@@ -23,7 +23,8 @@ assignment_fields = {
     "id": fields.Integer,
     "title": fields.String,
     "course": fields.String,
-    "due_date": fields.DateTime,
+    #iso8601 keeps the naive local time as-is (rfc822 mislabels it as UTC and shifts it in the browser)
+    "due_date": fields.DateTime(dt_format="iso8601"),
     "type": fields.String,
     "completed": fields.Boolean,
     "source": fields.String
@@ -35,6 +36,11 @@ assignment_parser.add_argument("title", type=str, required=True, location="json"
 assignment_parser.add_argument("course", type=str, required=True, location="json")
 assignment_parser.add_argument("due_date", type=str, required=True, location="json")
 assignment_parser.add_argument("type", type=str, required=True, location="json")
+assignment_parser.add_argument("completed", type=bool, location="json")
+
+#rejects fields that are empty or only spaces
+def blank_fields(args, names):
+    return [n for n in names if args.get(n) is not None and not args[n].strip()]
 
 
 ##RESOURCE CLASSES AND METHODS
@@ -56,16 +62,21 @@ class AssignmentResource(Resource):
     def post(self):
         args = assignment_parser.parse_args()
 
+        blank = blank_fields(args, ["title", "course", "type"])
+        if blank:
+            raise BadRequest(f"{', '.join(blank)} cannot be empty")
+
         try:
             due_date = datetime.fromisoformat(args["due_date"])
         except ValueError:
             raise BadRequest("Invalid date format. Use YYYY-MM-DDTHH:MM:SS")
 
         assignment = AssignmentModel(
-            title=args["title"],
-            course=args["course"],
+            title=args["title"].strip(),
+            course=args["course"].strip(),
             due_date=due_date,
-            type=args["type"]
+            type=args["type"].strip(),
+            completed=bool(args["completed"])
         )
 
         db.session.add(assignment)
@@ -79,7 +90,7 @@ class AssignmentResource2(Resource):
         assignment=db.session.get(AssignmentModel,id)
 
         if assignment is None:
-            return {"message":"Assignment not found}"},404
+            return {"message":"Assignment not found"},404
 
         db.session.delete(assignment)
         db.session.commit()
@@ -94,11 +105,15 @@ class AssignmentResource2(Resource):
 
         args = patch_parser.parse_args()
 
+        blank = blank_fields(args, ["title", "course", "type"])
+        if blank:
+            return {"message": f"{', '.join(blank)} cannot be empty"}, 400
+
         if args["title"] is not None:
-            assignment.title = args["title"]
+            assignment.title = args["title"].strip()
 
         if args["course"] is not None:
-            assignment.course = args["course"]
+            assignment.course = args["course"].strip()
 
         if args["due_date"] is not None:
             try:
@@ -107,7 +122,7 @@ class AssignmentResource2(Resource):
                 return {"message": "Invalid date format. Use YYYY-MM-DDTHH:MM:SS"}, 400
 
         if args["type"] is not None:
-            assignment.type = args["type"]
+            assignment.type = args["type"].strip()
 
         if args["completed"] is not None:
             assignment.completed = args["completed"]
