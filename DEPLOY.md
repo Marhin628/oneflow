@@ -17,6 +17,11 @@ You need to do three things once: create a Google sign-in client, deploy the Blu
 
    Leave redirect URIs empty, because OneFlow doesn't use them.
 4. Copy the **Client ID**, which looks like `1234-abc.apps.googleusercontent.com`. You don't need the client secret.
+
+IT IS 
+
+878911024136-b95jqg36jb7drs6frdo3vpna5va5ka6q.apps.googleusercontent.com
+
 5. Under **Audience**, the app starts in **Testing**, where only the test users you add can sign in. To let anyone with a Google account join, click **Publish app**. Basic-scope apps don't need Google's verification review.
 
 ## 2. Deploy on Render
