@@ -1,0 +1,30 @@
+# Render Blueprint: one web service (Flask API + built React app) and a Postgres database.
+# Deploy: Render dashboard → New → Blueprint → pick this repo. See DEPLOY.md.
+services:
+  - type: web
+    name: oneflow
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt && cd frontend && npm ci && npm run build
+    # --preload runs the startup migration once before the workers start
+    startCommand: gunicorn app:app --preload --workers 2 --bind 0.0.0.0:$PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.14.4
+      - key: NODE_VERSION
+        value: 22.22.1
+      - key: SECRET_KEY
+        generateValue: true
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: OWNER_EMAIL
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: oneflow-db
+          property: connectionString
+
+databases:
+  - name: oneflow-db
+    plan: free

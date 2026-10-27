@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
@@ -54,17 +54,84 @@ function errorText(data, status) {
   if (msg && typeof msg === 'object') return Object.entries(msg).map(([k,v])=>`${k}: ${v}`).join('; ');
   return `Request failed (${status})`;
 }
-async function api(path='', options={}) {
+// Called when any request comes back 401 (signed out or session expired); App points it at its sign-out handler.
+let onUnauthorized = () => {};
+async function request(url, options={}) {
   let response;
-  try { response = await fetch(API+path, {headers:{'Content-Type':'application/json'}, ...options}); }
-  catch { throw new Error('Cannot reach Flask. Make sure python app.py is running on port 5000.'); }
+  try { response = await fetch(url, {headers:{'Content-Type':'application/json'}, credentials:'same-origin', ...options}); }
+  catch { throw new Error('Cannot reach the OneFlow server. Check your connection and try again.'); }
   let data;
   try { data = await response.json(); } catch { data = null; }
+  if (response.status===401 && url!=='/api/auth/google') onUnauthorized();
   if (!response.ok) throw new Error(errorText(data, response.status));
   return data;
 }
+const api = (path='', options={}) => request(API+path, options);
+
+// Loads Google's sign-in script once (https://developers.google.com/identity/gsi/web).
+let googleScript;
+function loadGoogle() {
+  googleScript ||= new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.async = true;
+    s.onload = () => window.google?.accounts?.id ? resolve(window.google) : reject(new Error('Google sign-in did not load'));
+    s.onerror = () => { googleScript = null; reject(new Error('Google sign-in did not load')); };
+    document.head.appendChild(s);
+  });
+  return googleScript;
+}
+
+function SignIn({ onSignedIn }) {
+  const [config,setConfig] = useState(null);
+  const [error,setError] = useState('');
+  const button = useRef(null);
+  useEffect(()=>{ request('/api/config').then(setConfig).catch(e=>setError(e.message)); },[]);
+  useEffect(()=>{
+    if (!config?.google_client_id) return;
+    let cancelled = false;
+    loadGoogle().then(google=>{
+      if (cancelled || !button.current) return;
+      google.accounts.id.initialize({ client_id:config.google_client_id, callback: async ({credential})=>{
+        setError('');
+        try { onSignedIn(await request('/api/auth/google',{method:'POST',body:JSON.stringify({credential})})); }
+        catch(e) { setError(e.message); }
+      }});
+      google.accounts.id.renderButton(button.current, { theme:'outline', size:'large', shape:'pill', text:'continue_with', width:280 });
+    }).catch(()=>setError('Could not load Google sign-in. Check your connection and refresh the page.'));
+    return ()=>{ cancelled = true; };
+  },[config]);
+  return <div className="signin">
+    <div className="signin-card">
+      <div className="brand"><span className="brandmark">◈</span> OneFlow</div>
+      <p>Your assignments, exams and schedule in one calendar.</p>
+      {config&&!config.google_client_id&&<div className="error">Google sign-in isn't set up on this server yet (GOOGLE_CLIENT_ID is missing).</div>}
+      <div ref={button} className="gbutton"/>
+      {error&&<div className="error">{error}</div>}
+      <small>Your calendar is private to your Google account.</small>
+    </div>
+  </div>;
+}
 
 export default function App() {
+  // undefined while checking the session, null when signed out
+  const [user,setUser] = useState(undefined);
+  useEffect(()=>{
+    onUnauthorized = () => setUser(null);
+    request('/api/me').then(setUser).catch(()=>setUser(null));
+  },[]);
+  const signOut = async () => {
+    try { await request('/api/auth/logout',{method:'POST'}); } catch { /* signed out locally either way */ }
+    window.google?.accounts?.id?.disableAutoSelect();
+    setUser(null);
+  };
+  if (user===undefined) return <div className="signin"><div className="loading">Loading…</div></div>;
+  if (user===null) return <SignIn onSignedIn={setUser}/>;
+  // keyed by user so switching accounts starts from a clean state
+  return <Calendar key={user.id} user={user} onSignOut={signOut}/>;
+}
+
+function Calendar({ user, onSignOut }) {
   const [items,setItems] = useState([]);
   const [loading,setLoading] = useState(true);
   const [error,setError] = useState('');
@@ -162,6 +229,11 @@ export default function App() {
       <div className="newbtns">
         <button className="secondary" onClick={()=>openNew('event')}>+ Event</button>
         <button className="primary" onClick={()=>openNew('assignment')}>+ Assignment</button>
+        <div className="account">
+          {user.picture?<img src={user.picture} alt="" referrerPolicy="no-referrer"/>:<span className="avatar">{(user.name||user.email||'?')[0].toUpperCase()}</span>}
+          <span className="who" title={user.email}>{user.name||user.email}</span>
+          <button className="link" onClick={onSignOut}>Sign out</button>
+        </div>
       </div>
     </header>
 

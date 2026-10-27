@@ -15,3 +15,4 @@ frontend/dist/
 tests/.e2e/
 frontend/test-results/
 frontend/playwright-report/
+!.env.example

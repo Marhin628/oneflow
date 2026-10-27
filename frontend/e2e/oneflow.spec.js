@@ -1,10 +1,16 @@
-import { test, expect } from '@playwright/test';
-import { TEST_API } from '../playwright.config.js';
+import { test as base, expect } from '@playwright/test';
+
+// `request` shares the page's cookies, so API calls in tests act as the signed-in test user.
+const test = base.extend({ request: async ({ page }, use) => { await use(page.request); } });
 
 // The browser clock is pinned to Wed Oct 28 2026, 10:00 (America/Chicago) so the
 // visible month/week and "overdue" status are the same on every run.
 const NOW = new Date('2026-10-28T10:00:00-05:00');
-const API = `${TEST_API}/api/assignments`;
+const API = '/api/assignments';
+const signIn = async (request, email='tester@example.com', name='Test User') => {
+  const r = await request.post('/api/auth/test-login', { data:{ email, name } });
+  expect(r.status(), await r.text()).toBe(200);
+};
 
 const hw = (over={}) => ({ title:'HW1', course:'CSE 220', type:'assignment', due_date:'2026-10-29T14:00:00', ...over });
 const ev = (over={}) => ({ kind:'event', title:'Lecture', course:'', type:'class', due_date:'2026-10-28T14:00:00', end_date:'2026-10-28T15:00:00', ...over });
@@ -46,8 +52,9 @@ async function slot(page, date, time, dy=4) {
 }
 
 test.beforeEach(async ({ request }) => {
-  // Clears the throwaway e2e database (port 5001) only.
-  expect(API).toContain('127.0.0.1:5001');
+  // Only the throwaway e2e server has test login enabled, so this can never clear real data.
+  expect((await (await request.get('/api/config')).json()).test_login).toBe(true);
+  await signIn(request);
   for (const item of await all(request)) await request.delete(`${API}/${item.id}`);
 });
 
@@ -348,4 +355,81 @@ test('everything is still there after a refresh', async ({ page, request }) => {
   await expect(dialog(page).getByLabel('Starts')).toHaveValue('2026-10-29T11:00');
   await expect(dialog(page).getByLabel('Ends')).toHaveValue('2026-10-29T12:15');
   expect(await all(request)).toHaveLength(2);
+});
+
+test.describe('accounts', () => {
+  test('signed-out visitors see the sign-in screen, not the calendar', async ({ page, request }) => {
+    await request.post('/api/auth/logout');
+    await page.clock.setFixedTime(NOW);
+    await page.goto('/');
+    await expect(page.locator('.signin-card')).toContainText('Your assignments, exams and schedule in one calendar.');
+    // the e2e server has no GOOGLE_CLIENT_ID, so the screen explains that instead of showing a broken button
+    await expect(page.locator('.signin-card .error')).toContainText("Google sign-in isn't set up");
+    await expect(page.locator('.fc')).toHaveCount(0);
+  });
+
+  test('the header shows who is signed in, and signing out returns to the sign-in screen', async ({ page }) => {
+    await open(page);
+    await expect(page.locator('.account')).toContainText('Test User');
+    await page.getByRole('button', { name:'Sign out' }).click();
+    await expect(page.locator('.signin-card')).toBeVisible();
+    await page.reload();
+    await expect(page.locator('.signin-card')).toBeVisible();
+    await expect(page.locator('.fc')).toHaveCount(0);
+  });
+
+  test("people only see their own calendar", async ({ page, request }) => {
+    await seed(request, hw({ title:'Tester only' }));
+    await signIn(request, 'other@example.com', 'Other Person');
+    for (const item of await all(request)) await request.delete(`${API}/${item.id}`);
+    await seed(request, hw({ title:'Other only' }));
+    await open(page);
+    await expect(page.locator('.account')).toContainText('Other Person');
+    await expect(calEvent(page, 'Other only')).toBeVisible();
+    await expect(calEvent(page, 'Tester only')).toHaveCount(0);
+
+    await signIn(request);
+    await page.reload();
+    await expect(calEvent(page, 'Tester only')).toBeVisible();
+    await expect(calEvent(page, 'Other only')).toHaveCount(0);
+  });
+
+  test('an expired session sends you back to the sign-in screen', async ({ page, request }) => {
+    await open(page);
+    await page.context().clearCookies();
+    await page.getByRole('button', { name:'+ Assignment' }).click();
+    await dialog(page).getByLabel('Title').fill('After expiry');
+    await dialog(page).getByLabel('Course').fill('CSE 220');
+    await dialog(page).getByLabel('Due date & time').fill('2026-10-29T14:00');
+    await dialog(page).getByRole('button', { name:'Save' }).click();
+    await expect(page.locator('.signin-card')).toBeVisible();
+  });
+
+  test('the Google button sends its credential to the server and signs you in', async ({ page, request }) => {
+    await request.post('/api/auth/logout');
+    // Stand-in for Google's script: renders a button that hands back a fake credential.
+    await page.route('https://accounts.google.com/gsi/client', route => route.fulfill({ contentType:'text/javascript', body:`
+      window.google = { accounts: { id: {
+        initialize(opts) { window.__gsi = opts; },
+        renderButton(el) { const b = document.createElement('button'); b.textContent = 'Continue with Google (stub)';
+          b.onclick = () => window.__gsi.callback({ credential: 'fake-google-credential' }); el.appendChild(b); },
+        disableAutoSelect() {},
+      } } };` }));
+    await page.route('**/api/config', route => route.fulfill({ json:{ google_client_id:'e2e-client-id', test_login:true } }));
+    // The real server can't verify a fake Google token, so check what the page sent and sign in with the test login instead.
+    let sent;
+    await page.route('**/api/auth/google', async route => {
+      sent = route.request().postDataJSON();
+      const response = await route.fetch({ url:route.request().url().replace('/api/auth/google', '/api/auth/test-login'),
+        postData:JSON.stringify({ email:'tester@example.com', name:'Test User' }) });
+      await route.fulfill({ response });
+    });
+    await page.clock.setFixedTime(NOW);
+    await page.goto('/');
+    await page.getByRole('button', { name:'Continue with Google (stub)' }).click();
+    await expect(page.locator('.fc')).toBeVisible();
+    await expect(page.locator('.account')).toContainText('Test User');
+    expect(sent).toEqual({ credential:'fake-google-credential' });
+    expect(await page.evaluate(() => window.__gsi.client_id)).toBe('e2e-client-id');
+  });
 });

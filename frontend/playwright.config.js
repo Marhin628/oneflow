@@ -8,6 +8,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dbDir = path.join(root, 'tests', '.e2e');
 const dbFile = path.join(dbDir, 'oneflow-e2e.db');
 export const TEST_API = 'http://127.0.0.1:5001';
+// Set ONEFLOW_E2E_BASE_URL to test an already-running server (e.g. a production build) instead; it must have ONEFLOW_TEST_LOGIN=1.
+const external = process.env.ONEFLOW_E2E_BASE_URL;
 
 export default defineConfig({
   testDir: './e2e',
@@ -16,7 +18,7 @@ export default defineConfig({
   retries: 0,
   reporter: [['list']],
   use: {
-    baseURL: 'http://localhost:5174',
+    baseURL: external || 'http://localhost:5174',
     timezoneId: 'America/Chicago',
     locale: 'en-US',
     viewport: { width: 1400, height: 1000 },
@@ -24,12 +26,13 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1400, height: 1000 } } }],
-  webServer: [
+  webServer: external ? [] : [
     {
       command: `mkdir -p "${dbDir}" && rm -f "${dbFile}" && .venv/bin/python -m flask --app app run --port 5001`,
       cwd: root,
-      url: `${TEST_API}/api/assignments`,
-      env: { ONEFLOW_DATABASE_URI: `sqlite:///${dbFile}` },
+      url: `${TEST_API}/api/health`,
+      // test-only login on, .env ignored so real settings (owner, client id) never leak into tests
+      env: { ONEFLOW_DATABASE_URI: `sqlite:///${dbFile}`, ONEFLOW_TEST_LOGIN: '1', FLASK_SKIP_DOTENV: '1', SECRET_KEY: 'e2e-secret', GOOGLE_CLIENT_ID: '', OWNER_EMAIL: '', DATABASE_URL: '', RENDER: '' },
       reuseExistingServer: false,
     },
     {
