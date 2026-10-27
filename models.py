@@ -20,4 +20,7 @@ class AssignmentModel(db.Model):
     type=db.Column(db.String(30),nullable=False)
     completed=db.Column(db.Boolean,default=False)
     source=db.Column(db.String(30),default="manual")
+    #v0.2: "assignment" (due_date is the deadline) or "event" (due_date is the start, end_date the end)
+    kind=db.Column(db.String(20),nullable=False,default="assignment",server_default="assignment")
+    end_date=db.Column(db.DateTime,nullable=True)
     
