@@ -1,6 +1,7 @@
 ##IMPORTS
 #this file runs flask itself and handles the API requests
 
+import os
 from flask import Flask
 from models import db, AssignmentModel
 from flask_restful import Api, Resource, fields, marshal_with,marshal, reqparse
@@ -14,7 +15,8 @@ app=Flask(__name__)
 api = Api(app)
 
 #configures the database (of our sqlalchemy) to sqlite with one flow
-app.config["SQLALCHEMY_DATABASE_URI"]="sqlite:///oneflow.db"
+#tests set ONEFLOW_DATABASE_URI to a separate file so they never touch the real data
+app.config["SQLALCHEMY_DATABASE_URI"]=os.environ.get("ONEFLOW_DATABASE_URI","sqlite:///oneflow.db")
 
 #initializes the objects in sqlalchemy to flask
 db.init_app(app)
